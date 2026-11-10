@@ -75,22 +75,48 @@ powershell -ExecutionPolicy Bypass -File NovaCode\build.ps1
 `mscoree.dll`, то есть вся ошибка сводится к одному: Windows не нашла CLR
 (.NET Framework). Причины по частоте:
 
-1. .NET Framework 4.0 не установлен (на XP по умолчанию его нет — там 1.1 или 2.0).
+1. .NET Framework 4.0 не установлен (на XP по умолчанию его нет — там 1.1 или 2.0,
+   а на «чистой» установке XP нет вообще ничего).
 2. Установлен только Client Profile 4.0 — в нём нет `System.Numerics.dll`.
-3. Установка .NET 4.0 битая или не хватает обновления/SP3.
+3. Установка .NET 4.0 битая или не хватает SP3.
 4. EXE запущен без `NovaCode.exe.config` (тогда CLR ищет не ту версию) или прямо
    из ZIP / с сетевого диска.
 
 Быстрая диагностика — файл `check.cmd` из пакета (или отдельно:
 [check.cmd](https://github.com/GALAXENKO/NovaCode/releases/latest/download/check.cmd)).
 Положите его рядом с `NovaCode.exe` и запустите двойным щелчком: он покажет версию
-Windows, наличие `mscoree.dll`, `v4.0.30319\clr.dll`, `System.Numerics.dll`, ключи
-реестра полного и клиентского профиля, содержимое `NovaCode.exe.config` и вердикт.
-Отчёт дублируется в `%TEMP%\NovaCode-check.txt`.
+Windows и Service Pack, свободное место, наличие `mscoree.dll`,
+`v4.0.30319\clr.dll`, `System.Numerics.dll`, все версии в `Microsoft.NET\Framework`,
+ключи реестра полного и клиентского профиля .NET 4.0, содержимое
+`NovaCode.exe.config` и вердикт. Отчёт дублируется в `%TEMP%\NovaCode-check.txt`.
 
-Лечение в 99% случаев — поставить **полный** .NET Framework 4.0
-(`dotNetFx40_Full_x86_x64.exe`, он же `dotNetFx40_Full_setup.exe`) на XP SP3.
-Client Profile и «только 2.0/3.5» не годятся.
+### Как поставить .NET Framework 4.0 на XP
+
+Нужен **полный** профиль, а не Client Profile. Официальный автономный установщик
+(он не требует интернета на самой XP):
+
+| | |
+| --- | --- |
+| файл | `dotNetFx40_Full_x86_x64.exe` |
+| размер | 50 449 456 байт (48,1 МБ) |
+| SHA-256 | `65E064258F2E418816B304F646FF9E87AF101E4C9552AB064BB74D281C38659F` |
+| ссылка | https://download.microsoft.com/download/9/5/A/95A9616B-7A37-4AF6-BC36-D6EA96C8DAAE/dotNetFx40_Full_x86_x64.exe |
+
+Порядок:
+
+1. Убедитесь, что это **XP SP3**: `check.cmd` печатает Service Pack из реестра.
+   На XP без SP3 установщик 4.0 откажется ставиться — сначала нужен SP3.
+2. Скачайте файл **на современном компьютере** и перенесите на XP (флешка, CD).
+   На самой XP Internet Explorer знает только TLS 1.0, и сайт Microsoft может
+   просто не открыться — это не баг NovaCode.
+3. Запустите установщик на XP от имени администратора, дождитесь конца и
+   перезагрузитесь. Установка занимает 5–15 минут.
+4. Запустите `check.cmd` ещё раз: в блоке `[Итог]` должно быть
+   «Полный .NET Framework 4.0 установлен», после чего `NovaCode.exe` стартует.
+
+Проверить, что файл скачался целиком, проще всего по размеру: ровно
+50 449 456 байт. На современной машине можно сверить и хеш:
+`certutil -hashfile dotNetFx40_Full_x86_x64.exe SHA256`.
 
 ## Первый запуск
 
