@@ -5,6 +5,7 @@ dist/
 *.pdb
 *.user
 *.suo
+tools/net40ref/
 
 # OS
 Thumbs.db

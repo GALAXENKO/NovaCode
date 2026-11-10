@@ -1,0 +1,100 @@
+@echo off
+rem ============================================================
+rem  NovaCode: проверка окружения на Windows XP
+rem  Положите этот файл рядом с NovaCode.exe и запустите двойным
+rem  щелчком. Отчёт печатается на экран и сохраняется в
+rem  %TEMP%\NovaCode-check.txt (кодировка DOS, CP866).
+rem ============================================================
+chcp 866 >nul 2>&1
+setlocal
+set "LOG=%TEMP%\NovaCode-check.txt"
+if /i "%~1"=="log" goto checks
+title NovaCode: проверка окружения
+call "%~f0" log > "%LOG%" 2>&1
+type "%LOG%"
+echo.
+echo   Отчёт сохранён в файл:
+echo   %LOG%
+echo.
+echo   Скопировать текст в буфер: правый клик по заголовку окна,
+echo   "Правка" - "Выделить всё", затем Enter.
+echo.
+pause
+exit /b 0
+
+:checks
+echo ================================================
+echo    NovaCode: проверка окружения Windows XP
+echo ================================================
+echo.
+
+echo [Система]
+ver
+echo   PROCESSOR_ARCHITECTURE=%PROCESSOR_ARCHITECTURE%
+echo   Папка скрипта: %~dp0
+echo.
+
+echo [Файлы NovaCode]
+if exist "%~dp0NovaCode.exe" for %%F in ("%~dp0NovaCode.exe") do echo   NovaCode.exe: есть, %%~zF байт
+if not exist "%~dp0NovaCode.exe" echo   NovaCode.exe: НЕ НАЙДЕН рядом со скриптом
+if exist "%~dp0NovaCode.exe.config" echo   NovaCode.exe.config: есть
+if not exist "%~dp0NovaCode.exe.config" echo   NovaCode.exe.config: НЕТ (CLR может не найти v4.0)
+echo   Ожидаемый размер NovaCode.exe: 223744 байт
+echo.
+
+echo [.NET Framework 4.0]
+if exist "%windir%\system32\mscoree.dll" echo   mscoree.dll: есть
+if not exist "%windir%\system32\mscoree.dll" echo   mscoree.dll: НЕТ - .NET Framework не установлен вообще
+if exist "%windir%\Microsoft.NET\Framework\v4.0.30319\clr.dll" echo   CLR v4.0.30319: есть
+if not exist "%windir%\Microsoft.NET\Framework\v4.0.30319\clr.dll" echo   CLR v4.0.30319: НЕТ - нужен .NET Framework 4.0
+if exist "%windir%\Microsoft.NET\Framework\v4.0.30319\System.Numerics.dll" echo   System.Numerics.dll: есть
+if not exist "%windir%\Microsoft.NET\Framework\v4.0.30319\System.Numerics.dll" echo   System.Numerics.dll: НЕТ - похоже на Client Profile
+echo.
+echo   Версии в %windir%\Microsoft.NET\Framework:
+dir /b /ad "%windir%\Microsoft.NET\Framework" 2>nul
+echo.
+echo   Реестр, полный профиль .NET 4.0:
+call :regcheck "HKLM\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full" "полный .NET 4.0"
+echo   Реестр, клиентский профиль .NET 4.0:
+call :regcheck "HKLM\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Client" "Client Profile"
+echo.
+
+echo [Конфигурация NovaCode.exe.config]
+if exist "%~dp0NovaCode.exe.config" find /i "supportedRuntime" "%~dp0NovaCode.exe.config" 2>nul
+if not exist "%~dp0NovaCode.exe.config" echo   Файла нет.
+echo.
+
+echo [Итог]
+if not exist "%windir%\Microsoft.NET\Framework\v4.0.30319\clr.dll" goto no_dotnet
+if not exist "%windir%\Microsoft.NET\Framework\v4.0.30319\System.Numerics.dll" goto client_profile
+echo   Полный .NET Framework 4.0 установлен.
+echo   Если ошибка 0xc0000135 остаётся:
+echo   1) переустановите .NET 4.0 поверх (dotNetFx40_Full_x86_x64.exe);
+echo   2) проверьте, что NovaCode.exe.config лежит рядом с EXE;
+echo   3) не запускайте EXE из ZIP или с сетевого диска - распакуйте
+echo      архив в локальную папку, например C:\NovaCode.
+goto done
+
+:no_dotnet
+echo   .NET Framework 4.0 НЕ установлен.
+echo   Код 0xc0000135 (STATUS_DLL_NOT_FOUND) для управляемого EXE
+echo   означает ровно это: Windows не нашла CLR.
+echo   Установите полный .NET Framework 4.0 на Windows XP SP3:
+echo   dotNetFx40_Full_x86_x64.exe (он же dotNetFx40_Full_setup.exe).
+echo   Client Profile не подходит.
+goto done
+
+:client_profile
+echo   Установлен только клиентский профиль .NET 4.0.
+echo   Нужен полный .NET Framework 4.0 (Full), не Client Profile:
+echo   NovaCode использует System.Numerics.dll.
+goto done
+
+:done
+echo.
+exit /b 0
+
+:regcheck
+reg query %1 /v Install >nul 2>&1
+if errorlevel 1 (echo   %~2: ключ не найден) else (echo   %~2: установлен)
+exit /b 0

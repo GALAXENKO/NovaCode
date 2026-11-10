@@ -157,6 +157,18 @@ if ($Package) {
             (New-Object System.Text.UTF8Encoding($true)))
     }
 
+    # check.cmd для диагностики на XP: cmd.exe читает файлы в OEM-кодировке (CP866),
+    # поэтому исходник в UTF-8 перекодируем. Копия кладётся и в dist для скачивания по одной ссылке.
+    $checkSrc = Join-Path $here "tools\check.cmd.utf8"
+    if (Test-Path $checkSrc) {
+        $cmdText = [System.IO.File]::ReadAllText($checkSrc, [System.Text.Encoding]::UTF8)
+        # cmd.exe ждёт переводы строк CRLF: с LF-только ломаются метки и goto.
+        $cmdText = $cmdText -replace "`r`n", "`n" -replace "`n", "`r`n"
+        $oem = [System.Text.Encoding]::GetEncoding(866)
+        [System.IO.File]::WriteAllText((Join-Path $stage "check.cmd"), $cmdText, $oem)
+        [System.IO.File]::WriteAllText((Join-Path $dist "check.cmd"), $cmdText, $oem)
+    }
+
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     [System.IO.Compression.ZipFile]::CreateFromDirectory($stage, $zip)
     Remove-Item $stage -Recurse -Force

@@ -29,7 +29,8 @@
 **На машине с XP:**
 
 * Windows XP SP3 (x86).
-* .NET Framework 4.0 (последняя версия, которая ставится на XP; 4.5+ — нет).
+* **Полный** .NET Framework 4.0 (последняя версия, которая ставится на XP; 4.5+ — нет).
+  Client Profile не подходит: в нём нет `System.Numerics.dll`, который нужен для RSA.
 * Сеть до API. Системный TLS на XP — это только TLS 1.0, которого современные API уже
   не принимают, поэтому NovaCode по умолчанию ходит через **свой TLS 1.3** (см. ниже).
   Прокси и stunnel не нужны.
@@ -52,7 +53,7 @@ powershell -ExecutionPolicy Bypass -File NovaCode\build.ps1
 | --- | --- |
 | `-SelfTest` | собирает и прогоняет самотест (96 проверок, сеть не нужна) |
 | `-Run` | собирает и запускает GUI |
-| `-Package` | собирает ZIP для XP в `NovaCode\dist\NovaCode-xp.zip` |
+| `-Package` | собирает ZIP для XP в `NovaCode\dist\NovaCode-xp.zip` (EXE, config, README.txt, check.cmd) |
 | `-OutDir <путь>` | куда положить `NovaCode.exe` (по умолчанию `NovaCode\bin`) |
 
 Компиляция идёт строго против reference assemblies .NET Framework 4.0 с `/nostdlib+`,
@@ -67,6 +68,29 @@ powershell -ExecutionPolicy Bypass -File NovaCode\build.ps1
 
 Ничего регистрировать не нужно, установщик не требуется. Настройки и сессии создаются
 в `%APPDATA%\NovaCode\`.
+
+## Если при запуске ошибка 0xc0000135
+
+`0xc0000135` — это `STATUS_DLL_NOT_FOUND`. Наш EXE импортирует ровно одну DLL,
+`mscoree.dll`, то есть вся ошибка сводится к одному: Windows не нашла CLR
+(.NET Framework). Причины по частоте:
+
+1. .NET Framework 4.0 не установлен (на XP по умолчанию его нет — там 1.1 или 2.0).
+2. Установлен только Client Profile 4.0 — в нём нет `System.Numerics.dll`.
+3. Установка .NET 4.0 битая или не хватает обновления/SP3.
+4. EXE запущен без `NovaCode.exe.config` (тогда CLR ищет не ту версию) или прямо
+   из ZIP / с сетевого диска.
+
+Быстрая диагностика — файл `check.cmd` из пакета (или отдельно:
+[check.cmd](https://github.com/GALAXENKO/NovaCode/releases/latest/download/check.cmd)).
+Положите его рядом с `NovaCode.exe` и запустите двойным щелчком: он покажет версию
+Windows, наличие `mscoree.dll`, `v4.0.30319\clr.dll`, `System.Numerics.dll`, ключи
+реестра полного и клиентского профиля, содержимое `NovaCode.exe.config` и вердикт.
+Отчёт дублируется в `%TEMP%\NovaCode-check.txt`.
+
+Лечение в 99% случаев — поставить **полный** .NET Framework 4.0
+(`dotNetFx40_Full_x86_x64.exe`, он же `dotNetFx40_Full_setup.exe`) на XP SP3.
+Client Profile и «только 2.0/3.5» не годятся.
 
 ## Первый запуск
 
@@ -189,6 +213,7 @@ NovaCode/
   app.manifest          Common Controls 6, поддержка XP, DPI
   app.config            supportedRuntime v4.0
   build.ps1             сборка через csc.exe
+  tools/check.cmd.utf8  диагностика окружения для XP (в пакете — check.cmd в CP866)
 ```
 
 ## Самотест
