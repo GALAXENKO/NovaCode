@@ -17,6 +17,8 @@ namespace NovaCode.Core
         public string Workspace = "";
         public string SystemPrompt = "";
         public bool InsecureTls = false;
+        /// <summary>Свой TLS 1.3 вместо системного Schannel (на XP он умеет только TLS 1.0).</summary>
+        public bool OwnTls = true;
         public double PriceIn = 0;    // $ за 1M входных токенов
         public double PriceOut = 0;   // $ за 1M выходных токенов
         public string Theme = "dark";
@@ -93,6 +95,7 @@ namespace NovaCode.Core
             Workspace = Json.Str(root, "workspace", Workspace);
             SystemPrompt = Json.Str(root, "systemPrompt", SystemPrompt);
             InsecureTls = Json.Bool(root, "insecureTls", InsecureTls);
+            OwnTls = Json.Bool(root, "ownTls", OwnTls);
             PriceIn = Json.Num(root, "priceIn", PriceIn);
             PriceOut = Json.Num(root, "priceOut", PriceOut);
             Theme = Json.Str(root, "theme", Theme);
@@ -111,6 +114,7 @@ namespace NovaCode.Core
             d["workspace"] = Workspace;
             d["systemPrompt"] = SystemPrompt;
             d["insecureTls"] = InsecureTls;
+            d["ownTls"] = OwnTls;
             d["priceIn"] = PriceIn;
             d["priceOut"] = PriceOut;
             d["theme"] = Theme;

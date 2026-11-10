@@ -6,10 +6,9 @@
     гарантированно запускается на Windows XP SP3 с установленным .NET 4.0.
 
     Пример:
-        powershell -ExecutionPolicy Bypass -File build.ps1
-        powershell -ExecutionPolicy Bypass -File build.ps1 -SelfTest
-        powershell -ExecutionPolicy Bypass -File build.ps1 -Run
-        powershell -ExecutionPolicy Bypass -File build.ps1 -Package
+        powershell -ExecutionPolicy Bypass -File NovaCode\build.ps1
+        powershell -ExecutionPolicy Bypass -File NovaCode\build.ps1 -SelfTest
+        powershell -ExecutionPolicy Bypass -File NovaCode\build.ps1 -Run
 #>
 param(
     [switch]$Run,
@@ -103,7 +102,7 @@ if ($ref) {
     $needed = @(
         "mscorlib.dll", "System.dll", "System.Core.dll",
         "System.Drawing.dll", "System.Windows.Forms.dll",
-        "System.Xml.dll", "System.Configuration.dll"
+        "System.Xml.dll", "System.Configuration.dll", "System.Numerics.dll"
     )
     foreach ($asm in $needed) {
         $path = Join-Path $ref $asm

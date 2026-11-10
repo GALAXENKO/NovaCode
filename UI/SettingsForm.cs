@@ -26,6 +26,7 @@ namespace NovaCode.UI
 
         private NumericUpDown _fontSize;
         private CheckBox _insecureTls;
+        private CheckBox _ownTls;
         private NumericUpDown _priceIn;
         private NumericUpDown _priceOut;
 
@@ -173,27 +174,35 @@ namespace NovaCode.UI
             _fontSize = MakeNumber(36, 8, 16, 1, 0);
             page.Controls.Add(_fontSize);
 
+            _ownTls = new CheckBox();
+            _ownTls.Text = "Свой TLS 1.3 (обязательно на Windows XP: системный умеет только 1.0)";
+            _ownTls.Location = new Point(16, 72);
+            _ownTls.Size = new Size(460, 20);
+            _ownTls.ForeColor = Theme.Text;
+            _ownTls.FlatStyle = FlatStyle.System;
+            page.Controls.Add(_ownTls);
+
             _insecureTls = new CheckBox();
             _insecureTls.Text = "Не проверять сертификат TLS (для самоподписанных и локальных прокси)";
-            _insecureTls.Location = new Point(16, 72);
+            _insecureTls.Location = new Point(16, 96);
             _insecureTls.Size = new Size(460, 20);
             _insecureTls.ForeColor = Theme.Text;
             _insecureTls.FlatStyle = FlatStyle.System;
             page.Controls.Add(_insecureTls);
 
-            page.Controls.Add(MakeLabel("Цена за 1M входных токенов, $", 104));
-            _priceIn = MakeNumber(124, 0m, 1000m, 0.01m, 4);
+            page.Controls.Add(MakeLabel("Цена за 1M входных токенов, $", 128));
+            _priceIn = MakeNumber(148, 0m, 1000m, 0.01m, 4);
             page.Controls.Add(_priceIn);
 
-            page.Controls.Add(MakeLabel("Цена за 1M выходных токенов, $", 156));
-            _priceOut = MakeNumber(176, 0m, 1000m, 0.01m, 4);
+            page.Controls.Add(MakeLabel("Цена за 1M выходных токенов, $", 180));
+            _priceOut = MakeNumber(200, 0m, 1000m, 0.01m, 4);
             page.Controls.Add(_priceOut);
 
             page.Controls.Add(MakeNote(
-                "Windows XP умеет только TLS 1.0. Если сервер требует TLS 1.2, поставьте рядом\n" +
-                "локальный прокси (например, stunnel) и укажите его HTTP-адрес, либо работайте\n" +
-                "через сервер в локальной сети.",
-                216));
+                "Свой TLS 1.3 работает без системного Schannel, поэтому HTTPS доступен и на XP.\n" +
+                "Выключите его только если нужен системный стек (например, свой корпоративный прокси).\n" +
+                "Для локальных HTTP-адресов (llama.cpp, LM Studio) TLS не используется вообще.",
+                236));
 
             return page;
         }
@@ -270,6 +279,7 @@ namespace NovaCode.UI
             _workspace.Text = _config.Workspace;
             _systemPrompt.Text = _config.SystemPrompt;
             _insecureTls.Checked = _config.InsecureTls;
+            _ownTls.Checked = _config.OwnTls;
 
             _maxSteps.Value = Clamp(_maxSteps, _config.MaxSteps);
             _maxTokens.Value = Clamp(_maxTokens, _config.MaxTokens);
@@ -297,6 +307,7 @@ namespace NovaCode.UI
 
             _config.SystemPrompt = _systemPrompt.Text;
             _config.InsecureTls = _insecureTls.Checked;
+            _config.OwnTls = _ownTls.Checked;
 
             _config.MaxSteps = (int)_maxSteps.Value;
             _config.MaxTokens = (int)_maxTokens.Value;
@@ -313,6 +324,7 @@ namespace NovaCode.UI
             clone.ApiKey = _apiKey.Text.Trim();
             clone.Model = _model.Text.Trim();
             clone.InsecureTls = _insecureTls.Checked;
+            clone.OwnTls = _ownTls.Checked;
             clone.MaxTokens = (int)_maxTokens.Value;
             clone.Temperature = (double)_temperature.Value;
             return clone;

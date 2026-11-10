@@ -8,6 +8,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using NovaCode.Core.Tls;
 
 namespace NovaCode.Core
 {
@@ -517,10 +518,21 @@ namespace NovaCode.Core
 
         // ------------------------------------------------------------ webfetch
 
+        /// <summary>
+        /// Настройки TLS для webfetch. На XP системный Schannel умеет только TLS 1.0,
+        /// поэтому по умолчанию идём через свой TLS 1.3 — как и LlmClient.
+        /// Статический класс, поэтому значения выставляет Agent при создании.
+        /// </summary>
+        public static bool OwnTls = true;
+        public static bool InsecureTls = false;
+
         private static ToolResult WebFetch(Dictionary<string, object> args)
         {
             string url = Json.Str(args, "url", "");
             if (url.Length == 0) return ToolResult.Fail("Пустой url", "webfetch", "");
+
+            if (OwnTls && url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                return WebFetchOwnTls(url);
 
             var request = (HttpWebRequest)WebRequest.Create(url);
             request.UserAgent = "NovaCode/1.0 (Windows XP)";
@@ -540,6 +552,53 @@ namespace NovaCode.Core
 
                 return ToolResult.Ok(Util.Truncate(body, MaxOutputChars), "webfetch", url);
             }
+        }
+
+        /// <summary>То же самое, но по HTTPS через собственный TLS 1.3.</summary>
+        private static ToolResult WebFetchOwnTls(string url)
+        {
+            for (int hop = 0; hop <= 5; hop++)
+            {
+                using (HttpResponse response = TlsHttp.Get(
+                    url, "text/html,application/xhtml+xml,text/plain,*/*", InsecureTls, 30000))
+                {
+                    if (response.Status >= 300 && response.Status < 400)
+                    {
+                        string location = response.Header("Location");
+                        if (string.IsNullOrEmpty(location))
+                            return ToolResult.Fail("HTTP " + response.Status + " без Location", "webfetch", url);
+
+                        url = ResolveLocation(url, location);
+                        continue;
+                    }
+
+                    string body;
+                    try { body = response.ReadAllText(); }
+                    catch (Exception ex)
+                    {
+                        return ToolResult.Fail("Обрыв при чтении ответа: " + ex.Message, "webfetch", url);
+                    }
+
+                    if (!response.IsSuccess)
+                        return ToolResult.Fail(
+                            "HTTP " + response.Status + " " + response.Reason + ": " + Util.Truncate(body, 400),
+                            "webfetch", url);
+
+                    string contentType = response.Header("Content-Type") ?? "";
+                    if (contentType.IndexOf("html", StringComparison.OrdinalIgnoreCase) >= 0)
+                        body = HtmlToText(body);
+
+                    return ToolResult.Ok(Util.Truncate(body, MaxOutputChars), "webfetch", url);
+                }
+            }
+
+            return ToolResult.Fail("Слишком много перенаправлений", "webfetch", url);
+        }
+
+        private static string ResolveLocation(string baseUrl, string location)
+        {
+            try { return new Uri(new Uri(baseUrl), location).AbsoluteUri; }
+            catch { return location; }
         }
 
         /// <summary>Очень простой HTML→текст: без парсера, но для документации хватает.</summary>

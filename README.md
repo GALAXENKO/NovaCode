@@ -3,9 +3,6 @@
 Агент для написания кода в духе [OpenCode](https://opencode.ai), но работающий на **Windows XP SP3**.
 Один исполняемый файл, один .NET Framework 4.0, никаких зависимостей.
 
-**Готовый пакет:** [NovaCode-xp.zip](https://github.com/GALAXENKO/NovaCode/releases/latest) —
-распаковать и запустить, ключ не нужен для демо (`NovaCode.exe --mock`).
-
 Это эксперимент: проверить, можно ли получить привычный «агент в терминале/окне» на железе
 и софте 2001–2008 годов. Полноценный порт OpenCode невозможен (Bun требует Windows 10 1809+
 и SSE4.2, node-pty использует ConPTY, Electron на XP не запускается, Go официально прекратил
@@ -14,6 +11,8 @@
 ## Что внутри
 
 * Собственный агентский цикл: запрос к модели → выполнение инструментов → повтор, до `MaxSteps` шагов.
+* Собственный TLS 1.3 на managed-коде: XP со своим Schannel (только TLS 1.0) спокойно
+  разговаривает с современными API и сайтами — без stunnel и без прокси.
 * API — любой [OI]-совместимый `/chat/completions` со стримингом: DeepSeek, OpenRouter, Groq,
   Together, vLLM, llama.cpp, LM Studio, Ollama.
 * Инструменты повторяют набор OpenCode: `read`, `write`, `edit`, `ls`, `glob`, `grep`, `bash`, `webfetch`.
@@ -28,9 +27,9 @@
 
 * Windows XP SP3 (x86).
 * .NET Framework 4.0 (последняя версия, которая ставится на XP; 4.5+ — нет).
-* Сеть до API. Помните: XP умеет только TLS 1.0. Если провайдер требует TLS 1.2,
-  поставьте рядом локальный прокси (stunnel, nginx, tinyproxy с TLS-терминацией) и укажите
-  в настройках его HTTP-адрес, либо работайте через сервер в локальной сети.
+* Сеть до API. Системный TLS на XP — это только TLS 1.0, которого современные API уже
+  не принимают, поэтому NovaCode по умолчанию ходит через **свой TLS 1.3** (см. ниже).
+  Прокси и stunnel не нужны.
 
 **На машине сборки:**
 
@@ -41,17 +40,17 @@
 ## Сборка
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File build.ps1
+powershell -ExecutionPolicy Bypass -File NovaCode\build.ps1
 ```
 
 Флаги:
 
 | Флаг | Что делает |
 | --- | --- |
-| `-SelfTest` | собирает и прогоняет самотест (74 проверки, сеть не нужна) |
+| `-SelfTest` | собирает и прогоняет самотест (96 проверок, сеть не нужна) |
 | `-Run` | собирает и запускает GUI |
-| `-Package` | собирает ZIP для XP в `dist\NovaCode-xp.zip` |
-| `-OutDir <путь>` | куда положить `NovaCode.exe` (по умолчанию `bin`) |
+| `-Package` | собирает ZIP для XP в `NovaCode\dist\NovaCode-xp.zip` |
+| `-OutDir <путь>` | куда положить `NovaCode.exe` (по умолчанию `NovaCode\bin`) |
 
 Компиляция идёт строго против reference assemblies .NET Framework 4.0 с `/nostdlib+`,
 поэтому случайно использовать API из 4.5+ не получится — сборка просто не пройдёт.
@@ -77,6 +76,34 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 * **Рабочая папка проекта** — то, что агент имеет право читать и править.
 
 Кнопка «Проверить соединение» делает реальный запрос и показывает ответ сервера.
+
+## Свой TLS 1.3
+
+Windows XP дальше TLS 1.0 не умеет — это потолок Schannel, и обновлений для него не будет.
+Современные API (`api.deepseek.com`, `api.openai.com`, `api.anthropic.com`) требуют TLS 1.2+,
+поэтому внутри NovaCode живёт собственный клиент TLS 1.3 на C# 5:
+
+* шифры `TLS_AES_128_GCM_SHA256`, `TLS_AES_256_GCM_SHA384`, `TLS_CHACHA20_POLY1305_SHA256`
+  (AES-GCM и ChaCha20-Poly1305 написаны вручную, HKDF по RFC 5869);
+* обмен ключами X25519, подписи RSA-PSS / RSA PKCS#1 и ECDSA P-256 / P-384 — проходят
+  и RSA-, и ECC-цепочки;
+* проверка сертификатов своя: DER и X.509 разбираются вручную, потому что CryptoAPI на XP
+  не умеет SHA-256. Доверенные корни вшиты в EXE (20 штук, включая SSL.com 2022 и AAA),
+  плюс дополнительно читается системное хранилище `Root`;
+* HTTP/1.1 поверх этого TLS тоже свой: `Content-Length`, chunked, чтение до закрытия
+  и построчный SSE-стриминг с возможностью отмены.
+
+Один и тот же транспорт используют и запросы к модели, и инструмент `webfetch`.
+Переключатель «Свой TLS 1.3» в настройках (по умолчанию включён) возвращает старое
+поведение через `HttpWebRequest` — для локальных серверов и отладки.
+
+Проверено на живых серверах: 29 из 32 хостов, среди них Cloudflare, Google, GitHub,
+Apple, Microsoft, Amazon, Wikipedia, Yandex и все три API. Отдельно проверен
+SSE-стриминг (`stream.wikimedia.org`) и `webfetch` по HTTPS.
+
+Честные ограничения: TLS 1.2 fallback пока нет — сервер, который умеет только 1.2,
+не подключится; сайты с антибот-фильтрами по TLS-отпечатку (например, `www.ssl.com`
+за Azure Front Door) могут просто закрыть соединение.
 
 ## Демо-режим без ключа
 
@@ -110,17 +137,19 @@ NovaCode.exe --mock
 
 ## Ограничения
 
-* TLS 1.0 — предел самого XP (см. выше про stunnel).
+* TLS: свой клиент умеет только TLS 1.3 (и `http` без шифрования). Сервер, который
+  согласен лишь на TLS 1.2, не подключится; fallback на 1.2 — следующий шаг.
 * `bash`-инструмент на самом деле `cmd.exe`: PowerShell на XP есть только 2.0 и он неудобен.
   Системный промпт объясняет модели, что она работает в `cmd.exe`, а не в POSIX-шелле.
-* `webfetch` ходит только по `http`/`https` и только через TLS 1.0.
+* `webfetch` ходит по `http` и `https`; для `https` используется тот же свой TLS 1.3,
+  поэтому старый режим через `HttpWebRequest` на XP по HTTPS работать не будет.
 * Многопоточность ограничена: запрос к модели идёт в фоновом потоке, UI обновляется через `BeginInvoke`.
 * Процесс x86 — на XP x86 иначе никак, а на x64 XP это ещё и экономит память.
 
 ## Структура
 
 ```
-.
+NovaCode/
   Program.cs            точка входа, демо-режим (--mock), единый экземпляр, обработка падений
   Core/
     Json.cs             ручной парсер/сериализатор JSON
@@ -130,8 +159,25 @@ NovaCode.exe --mock
     Llm.cs              HTTP + SSE-стриминг, повторы, разбор tool_calls
     Session.cs          хранение сессий
     Agent.cs            агентский цикл и системный промпт
-    SelfTest.cs         74 проверки без сети (--selftest)
+    SelfTest.cs         96 проверок без сети (--selftest)
     MockLlm.cs          локальная заглушка [OI]-сервера: самотест и демо-режим
+    Tls/                свой TLS 1.3 и HTTP/1.1 поверх него
+      Tls13.cs            рукопожатие: ClientHello, ключи, Finished
+      Tls13Records.cs     записи TLS 1.3, шифрование и расшифровка
+      TlsHttp.cs          HTTP/1.1-клиент: GET/POST, chunked, SSE, отмена
+      HttpUrl.cs          разбор и сборка URL
+      X509Cert.cs         разбор X.509 из DER
+      TrustStore.cs       проверка цепочки и поиск издателя
+      TrustStoreData.cs   вшитые доверенные корни (Base64 DER)
+      Der.cs              DER-читатель
+      Hash.cs             SHA-256/384/512 и HKDF
+      AesGcm.cs           AES-GCM
+      ChaCha.cs           ChaCha20-Poly1305
+      X25519.cs           X25519
+      Rsa.cs              RSA: PSS, PKCS#1, OAEP-проверки
+      Ecdsa.cs            ECDSA P-256/P-384
+      Wire.cs             ByteWriter/ByteReader
+      TlsRecord.cs        записи, alert'ы, исключения
   UI/
     Theme.cs            палитра, шрифты с откатом Consolas → Lucida Console → Courier New
     Transcript.cs       стенограмма на RichTextBox с markdown-lite
@@ -145,9 +191,12 @@ NovaCode.exe --mock
 ## Самотест
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File build.ps1 -SelfTest
+powershell -ExecutionPolicy Bypass -File NovaCode\build.ps1 -SelfTest
 ```
 
 Проверяет JSON (включая `\u`-экранирование и round-trip), glob, защиту от выхода за рабочую
 папку, все восемь инструментов на временной папке, сериализацию сообщений и HTML→текст.
+Отдельные секции — криптография и TLS: векторы RFC 5869 (HKDF), NIST (AES-GCM),
+RFC 8439 (ChaCha20-Poly1305), RFC 7748 (X25519), подписи корневых сертификатов,
+разбор URL и разбор ответов HTTP/1.1 (включая chunked и SSE).
 Результат дублируется в `%APPDATA%\NovaCode\selftest.log` в UTF-8.

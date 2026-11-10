@@ -11,6 +11,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
+using NovaCode.Core.Tls;
 
 namespace NovaCode.Core
 {
@@ -40,6 +41,7 @@ namespace NovaCode.Core
             TestMessages();
             TestTruncate();
             TestHtmlToText();
+            TestTls();
             TestAgentLoop();
 
             watch.Stop();
@@ -321,6 +323,171 @@ namespace NovaCode.Core
             Check("заголовок на месте", text.Contains("Заголовок"), text);
         }
 
+        // ------------------------------------------------------------ TLS и HTTP
+
+        /// <summary>
+        /// Криптопримитивы и HTTP-разбор на эталонных векторах. Сети не требуют:
+        /// проверяются RFC-векторы и вшитые корневые сертификаты.
+        /// </summary>
+        private static void TestTls()
+        {
+            Section("TLS: примитивы");
+
+            // HKDF RFC 5869, тест 1
+            var ikm = new byte[22];
+            for (int i = 0; i < ikm.Length; i++) ikm[i] = 0x0b;
+            byte[] salt = Hex.Decode("000102030405060708090a0b0c");
+            byte[] info = Hex.Decode("f0f1f2f3f4f5f6f7f8f9");
+
+            byte[] prk = Hkdf.Extract(HashAlg.Sha256, salt, ikm);
+            Check("HKDF-Extract (RFC 5869)",
+                Hex.Encode(prk) == "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5",
+                Hex.Encode(prk));
+
+            byte[] okm = Hkdf.Expand(HashAlg.Sha256, prk, info, 42);
+            Check("HKDF-Expand (RFC 5869)",
+                Hex.Encode(okm) == "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865",
+                Hex.Encode(okm));
+
+            // AES-128-GCM, векторы NIST
+            var key = new byte[16];
+            var iv = new byte[12];
+            var empty = new byte[0];
+            var tag = new byte[16];
+            AesGcm.Encrypt(key, iv, empty, empty, 0, 0, empty, 0, tag, 0);
+            Check("AES-GCM тег пустого текста", Hex.Encode(tag) == "58e2fccefa7e3061367f1d57a4e7455a", Hex.Encode(tag));
+
+            var plain = new byte[16];
+            var cipher = new byte[16];
+            AesGcm.Encrypt(key, iv, empty, plain, 0, 16, cipher, 0, tag, 0);
+            Check("AES-GCM шифртекст", Hex.Encode(cipher) == "0388dace60b6a392f328c2b971b2fe78", Hex.Encode(cipher));
+            Check("AES-GCM тег", Hex.Encode(tag) == "ab6e47d42cec13bdf53a67b21257bddf", Hex.Encode(tag));
+
+            var restored = new byte[16];
+            bool gcmOk = AesGcm.Decrypt(key, iv, empty, cipher, 0, 16, tag, 0, restored, 0);
+            Check("AES-GCM расшифровка", gcmOk && Hex.Encode(restored) == Hex.Encode(plain), Hex.Encode(restored));
+
+            // ChaCha20-Poly1305 RFC 8439, 2.8.2
+            byte[] ckey = Hex.Decode("808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f");
+            byte[] cnonce = Hex.Decode("070000004041424344454647");
+            byte[] caad = Hex.Decode("50515253c0c1c2c3c4c5c6c7");
+            byte[] cplain = Encoding.ASCII.GetBytes(
+                "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.");
+            var ccip = new byte[cplain.Length];
+            var ctag = new byte[16];
+            ChaCha20Poly1305.Encrypt(ckey, cnonce, caad, cplain, 0, cplain.Length, ccip, 0, ctag, 0);
+            Check("ChaCha20-Poly1305 шифртекст",
+                Hex.Encode(ccip).StartsWith("d31a8d34648e60db7b86afbc53ef7ec2", StringComparison.Ordinal),
+                Hex.Encode(ccip).Substring(0, 32));
+            Check("ChaCha20-Poly1305 тег", Hex.Encode(ctag) == "1ae10b594f09e26a7e902ecbd0600691", Hex.Encode(ctag));
+
+            // X25519 RFC 7748, 5.2
+            byte[] shared = X25519.SharedSecret(
+                Hex.Decode("a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4"),
+                Hex.Decode("e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c"));
+            Check("X25519 (RFC 7748)",
+                Hex.Encode(shared) == "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552",
+                Hex.Encode(shared));
+
+            byte[] alicePriv = Hex.Decode("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
+            Check("X25519 открытый ключ",
+                Hex.Encode(X25519.PublicKey(alicePriv)) == "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+                Hex.Encode(X25519.PublicKey(alicePriv)));
+
+            Section("TLS: сертификаты");
+
+            var roots = new List<X509Cert>();
+            int broken = 0;
+            foreach (string base64 in TrustStoreData.Roots)
+            {
+                try { roots.Add(X509Cert.Parse(Convert.FromBase64String(base64))); }
+                catch { broken++; }
+            }
+
+            Check("вшитые корни разбираются", broken == 0 && roots.Count >= 20,
+                "корней " + roots.Count + ", битых " + broken);
+
+            // Без этих корней не проверяются цепочки Cloudflare/SSL.com 2022 года
+            // (например, example.com) и старые Comodo-цепочки.
+            int haveSsl2022 = 0, haveAaa = 0;
+            foreach (X509Cert root in roots)
+            {
+                if (root.SubjectText.IndexOf("SSL.com TLS", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                    root.SubjectText.IndexOf("2022", StringComparison.OrdinalIgnoreCase) >= 0) haveSsl2022++;
+                if (root.SubjectText.IndexOf("AAA Certificate Services", StringComparison.OrdinalIgnoreCase) >= 0) haveAaa++;
+            }
+
+            Check("есть корни SSL.com 2022 и AAA", haveSsl2022 == 2 && haveAaa == 1,
+                "SSL.com 2022: " + haveSsl2022 + ", AAA: " + haveAaa);
+
+            int selfSigned = 0, signedOk = 0;
+            foreach (X509Cert root in roots)
+            {
+                if (!root.IsSelfIssued || !root.HasKey) continue;
+                selfSigned++;
+                if (root.VerifyWith(root)) signedOk++;
+            }
+
+            Check("подписи самоподписанных корней верны", signedOk == selfSigned,
+                signedOk + " из " + selfSigned);
+
+            // Кросс-подписанные корни (Amazon Root CA 1 выписан Starfield Services Root CA G2)
+            // должны сходиться к другому корню из этого же списка.
+            int linked = 0, orphans = 0;
+            foreach (X509Cert root in roots)
+            {
+                if (root.IsSelfIssued && root.VerifyWith(root)) { linked++; continue; }
+
+                bool found = false;
+                foreach (X509Cert other in roots)
+                {
+                    if (ReferenceEquals(other, root)) continue;
+                    if (root.VerifyWith(other)) { found = true; break; }
+                }
+
+                if (found) linked++;
+                else { orphans++; Say("    без издателя: " + root.SubjectText); }
+            }
+
+            Check("у каждого корня есть проверяемый издатель", orphans == 0,
+                "проверено " + linked + ", без издателя " + orphans);
+
+            Section("TLS: HTTP");
+
+            HttpUrl parsed = HttpUrl.Parse("https://api.deepseek.com/v1/chat/completions");
+            Check("разбор https-адреса",
+                parsed.Scheme == "https" && parsed.Host == "api.deepseek.com" &&
+                parsed.Port == 443 && parsed.Path == "/v1/chat/completions",
+                parsed.Scheme + " " + parsed.Host + ":" + parsed.Port + parsed.Path);
+
+            HttpUrl local = HttpUrl.Parse("http://127.0.0.1:8080");
+            Check("разбор локального адреса без пути",
+                local.Scheme == "http" && local.Host == "127.0.0.1" && local.Port == 8080 && local.Path == "/",
+                local.Host + ":" + local.Port + local.Path);
+
+            HttpUrl upper = HttpUrl.Parse("HTTPS://Example.COM/A?b=1");
+            Check("схема и хост в нижнем регистре", upper.Scheme == "https" && upper.Host == "example.com" && upper.Path == "/A?b=1",
+                upper.Scheme + " " + upper.Host + " " + upper.Path);
+
+            // Тело с Content-Length
+            byte[] payload = Encoding.ASCII.GetBytes("hello body");
+            using (var body = new HttpBodyStream(new MemoryStream(payload), payload.Length, false))
+            using (var reader = new StreamReader(body, Encoding.ASCII))
+                Check("тело по Content-Length", reader.ReadToEnd() == "hello body", "");
+
+            // Тело chunked
+            byte[] chunked = Encoding.ASCII.GetBytes(
+                "5\r\nhello\r\n7\r\n, world\r\n0\r\n\r\n");
+            using (var body = new HttpBodyStream(new MemoryStream(chunked), -1, true))
+            using (var reader = new StreamReader(body, Encoding.ASCII))
+                Check("тело chunked", reader.ReadToEnd() == "hello, world", "");
+
+            // Тело до закрытия соединения
+            using (var body = new HttpBodyStream(new MemoryStream(payload), -1, false))
+            using (var reader = new StreamReader(body, Encoding.ASCII))
+                Check("тело до закрытия", reader.ReadToEnd() == "hello body", "");
+        }
+
         // ------------------------------------------------------------ агент на мок-сервере
 
         /// <summary>
@@ -342,6 +509,7 @@ namespace NovaCode.Core
                 AgentToolCallScenario(root);
                 AgentHttpErrorScenario(root);
                 AgentStreamOptionsScenario(root);
+                SystemHttpScenario(root);
             }
             finally
             {
@@ -493,8 +661,39 @@ namespace NovaCode.Core
             }
         }
 
-        private static Config MockConfig(int port, string workspace)
+        /// <summary>
+        /// Старый путь через HttpWebRequest (системный Schannel) должен оставаться рабочим:
+        /// он нужен для локальных HTTP-серверов и для тех, кто выключил свой TLS.
+        /// </summary>
+        private static void SystemHttpScenario(string root)
         {
+            using (var server = new MockLlmServer(delegate (string body)
+            {
+                return MockLlmServer.Sse(FinalChunks("системный путь"));
+            }))
+            {
+                Config config = MockConfig(server.Port, root);
+                config.OwnTls = false;
+
+                var messages = new List<Dictionary<string, object>>();
+                var user = Json.NewObject();
+                user["role"] = "user";
+                user["content"] = "ping";
+                messages.Add(user);
+
+                var client = new LlmClient(config);
+                string content = "";
+                string error = null;
+
+                try { content = client.Chat(messages, null, null, null).Content; }
+                catch (Exception ex) { error = ex.Message; }
+
+                Check("системный путь (HttpWebRequest) работает", content == "системный путь", error ?? content);
+                Check("системный путь передаёт ключ", server.LastAuthorization == "Bearer test-key", server.LastAuthorization);
+            }
+        }
+
+        private static Config MockConfig(int port, string workspace)        {
             var config = new Config();
             config.BaseUrl = "http://127.0.0.1:" + port.ToString(CultureInfo.InvariantCulture) + "/v1";
             config.Model = "mock-model";

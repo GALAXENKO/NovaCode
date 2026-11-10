@@ -5,6 +5,7 @@ using System.IO;
 using System.Net;
 using System.Text;
 using System.Threading;
+using NovaCode.Core.Tls;
 
 namespace NovaCode.Core
 {
@@ -30,6 +31,44 @@ namespace NovaCode.Core
         public LlmException(string message) : base(message) { }
     }
 
+    /// <summary>Ответ API с кодом ошибки: тело нужно, чтобы понять причину.</summary>
+    public sealed class HttpStatusException : Exception
+    {
+        public readonly int Status;
+        public readonly string BodyText;
+
+        public HttpStatusException(int status, string reason, string body)
+            : base(Format(status, reason, body))
+        {
+            Status = status;
+            BodyText = body ?? "";
+        }
+
+        private static string Format(int status, string reason, string body)
+        {
+            string message = "";
+
+            if (!string.IsNullOrEmpty(body))
+            {
+                try
+                {
+                    var root = Json.AsObject(Json.Parse(body));
+                    var error = Json.Obj(root, "error");
+                    message = Json.Str(error, "message", "");
+                    if (message.Length == 0) message = Json.Str(root, "message", "");
+                }
+                catch { }
+
+                if (message.Length == 0)
+                    message = body.Length > 400 ? body.Substring(0, 400) : body;
+            }
+
+            if (string.IsNullOrEmpty(message)) message = "сервер не объяснил причину";
+
+            return "HTTP " + status + (string.IsNullOrEmpty(reason) ? "" : " " + reason) + ": " + message;
+        }
+    }
+
     /// <summary>
     /// Клиент [OI]-совместимого API (/chat/completions) с потоковой передачей.
     /// Работает на .NET 4.0: HttpWebRequest + чтение SSE построчно, без async/await
@@ -39,6 +78,7 @@ namespace NovaCode.Core
     {
         private readonly Config _config;
         private HttpWebRequest _current;
+        private volatile HttpResponse _currentResponse;
         private volatile bool _cancelled;
 
         public LlmClient(Config config)
@@ -51,10 +91,18 @@ namespace NovaCode.Core
         public void Cancel()
         {
             _cancelled = true;
+
             HttpWebRequest request = _current;
             if (request != null)
             {
                 try { request.Abort(); }
+                catch { }
+            }
+
+            HttpResponse response = _currentResponse;
+            if (response != null)
+            {
+                try { response.Abort(); }
                 catch { }
             }
         }
@@ -94,6 +142,8 @@ namespace NovaCode.Core
             Action<string> onReasoning)
         {
             _cancelled = false;
+
+            if (_config.OwnTls) return ChatOwnTls(messages, tools, onText, onReasoning);
 
             bool includeUsage = true;
             HttpWebResponse response = null;
@@ -151,27 +201,7 @@ namespace NovaCode.Core
                                      List<Dictionary<string, object>> tools,
                                      bool includeUsage)
         {
-            var body = Json.NewObject();
-            body["model"] = _config.Model;
-            body["messages"] = messages;
-            body["stream"] = true;
-            body["temperature"] = _config.Temperature;
-            if (_config.MaxTokens > 0) body["max_tokens"] = _config.MaxTokens;
-
-            if (tools != null && tools.Count > 0)
-            {
-                body["tools"] = tools;
-                body["tool_choice"] = "auto";
-            }
-
-            if (includeUsage)
-            {
-                var opts = Json.NewObject();
-                opts["include_usage"] = true;
-                body["stream_options"] = opts;
-            }
-
-            string payload = Json.Stringify(body);
+            string payload = BuildPayload(messages, tools, includeUsage);
             byte[] bytes = new UTF8Encoding(false).GetBytes(payload);
 
             var request = (HttpWebRequest)WebRequest.Create(_config.ChatCompletionsUrl);
@@ -201,6 +231,144 @@ namespace NovaCode.Core
                 _current = null;
                 throw;
             }
+        }
+
+        // ------------------------------------------------------------ свой TLS
+
+        private string BuildPayload(List<Dictionary<string, object>> messages,
+                                    List<Dictionary<string, object>> tools,
+                                    bool includeUsage)
+        {
+            var body = Json.NewObject();
+            body["model"] = _config.Model;
+            body["messages"] = messages;
+            body["stream"] = true;
+            body["temperature"] = _config.Temperature;
+            if (_config.MaxTokens > 0) body["max_tokens"] = _config.MaxTokens;
+
+            if (tools != null && tools.Count > 0)
+            {
+                body["tools"] = tools;
+                body["tool_choice"] = "auto";
+            }
+
+            if (includeUsage)
+            {
+                var opts = Json.NewObject();
+                opts["include_usage"] = true;
+                body["stream_options"] = opts;
+            }
+
+            return Json.Stringify(body);
+        }
+
+        /// <summary>
+        /// Запрос через собственный TLS 1.3 и HTTP/1.1 — единственный путь,
+        /// который работает на Windows XP: системный Schannel знает только TLS 1.0.
+        /// </summary>
+        private AssistantTurn ChatOwnTls(
+            List<Dictionary<string, object>> messages,
+            List<Dictionary<string, object>> tools,
+            Action<string> onText,
+            Action<string> onReasoning)
+        {
+            HttpResponse response = null;
+
+            try
+            {
+                response = SendOwnTls(BuildPayload(messages, tools, true));
+            }
+            catch (HttpStatusException ex)
+            {
+                if (ex.BodyText.IndexOf("stream_options", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    // Провайдер не знает stream_options — повторяем без него.
+                    try
+                    {
+                        response = SendOwnTls(BuildPayload(messages, tools, false));
+                    }
+                    catch (HttpStatusException retry)
+                    {
+                        throw new LlmException(retry.Message);
+                    }
+                    catch (Exception retry)
+                    {
+                        if (_cancelled) return new AssistantTurn();
+                        throw new LlmException(DescribeTransportError(retry));
+                    }
+                }
+                else
+                {
+                    throw new LlmException(ex.Message);
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_cancelled) return new AssistantTurn();
+                throw new LlmException(DescribeTransportError(ex));
+            }
+
+            try
+            {
+                using (response)
+                using (var reader = new StreamReader(response.Body, Encoding.UTF8))
+                {
+                    return ReadStream(reader, onText, onReasoning);
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_cancelled) return new AssistantTurn();
+                throw new LlmException(DescribeTransportError(ex));
+            }
+            finally
+            {
+                _currentResponse = null;
+            }
+        }
+
+        private HttpResponse SendOwnTls(string payload)
+        {
+            var headers = new Dictionary<string, string>();
+            if (!string.IsNullOrEmpty(_config.ApiKey))
+                headers["Authorization"] = "Bearer " + _config.ApiKey;
+
+            HttpResponse response = TlsHttp.Send(
+                _config.ChatCompletionsUrl,
+                "POST",
+                headers,
+                new UTF8Encoding(false).GetBytes(payload),
+                "text/event-stream",
+                _config.InsecureTls,
+                120000);
+
+            if (!response.IsSuccess)
+            {
+                int status = response.Status;
+                string reason = response.Reason;
+                string body = "";
+                try { body = response.ReadAllText(); }
+                catch { }
+                response.Dispose();
+
+                throw new HttpStatusException(status, reason, body);
+            }
+
+            _currentResponse = response;
+            return response;
+        }
+
+        private static string DescribeTransportError(Exception ex)
+        {
+            if (ex is TlsException) return "TLS: " + ex.Message;
+
+            if (ex is System.Net.Sockets.SocketException)
+                return "Сетевая ошибка: " + ex.Message;
+
+            if (ex is IOException)
+                return "Обрыв соединения: " + ex.Message;
+
+            return ex.GetType().Name + ": " + ex.Message;
         }
 
         private static string ReadErrorBody(WebException ex)

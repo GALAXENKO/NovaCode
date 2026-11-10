@@ -46,6 +46,10 @@ namespace NovaCode.Core
             _config = config;
             _session = session;
             _llm = new LlmClient(config);
+
+            // webfetch статический, поэтому настройки TLS передаём ему явно.
+            Tools.OwnTls = config.OwnTls;
+            Tools.InsecureTls = config.InsecureTls;
         }
 
         public bool IsBusy { get; private set; }
