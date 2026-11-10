@@ -1,0 +1,11 @@
+# Сборка
+bin/
+obj/
+dist/
+*.pdb
+*.user
+*.suo
+
+# OS
+Thumbs.db
+desktop.ini
